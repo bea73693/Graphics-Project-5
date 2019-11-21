@@ -1,9 +1,13 @@
 "use strict";
 
-import {initFileShaders, perspective, vec2, vec4, mat4, flatten, lookAt, translate,rotateX, rotateY, rotateZ} from './helperfunctions.js';
+import {initFileShaders, perspective, vec2, vec4, mat4, flatten, lookAt, translate,rotateX, rotateY, rotateZ, scalem} from './helperfunctions.js';
 let gl:WebGLRenderingContext;
 let program:WebGLProgram;
+let vActiveProgram:WebGLUniformLocation;
 let activeProgram:GLint;
+let vCloudsActive:WebGLUniformLocation;
+let drawClouds:GLint;
+let disableClouds:boolean;
 
 //uniform locations
 let umv:WebGLUniformLocation; //uniform for mv matrix
@@ -18,8 +22,10 @@ let light_position:WebGLUniformLocation;
 let light_color:WebGLUniformLocation;
 let ambient_light:WebGLUniformLocation;
 
-let uTextureSampler:WebGLUniformLocation;//this will be a pointer to our sampler2D
+let uColorSampler:WebGLUniformLocation;//this will be a pointer to our sampler2D
 let uSpecSampler:WebGLUniformLocation;
+let uNightSampler:WebGLUniformLocation;
+let uCloudSampler:WebGLUniformLocation;
 
 //document elements
 let canvas:HTMLCanvasElement;
@@ -37,6 +43,12 @@ let worldimage:HTMLImageElement;
 
 let worldSpectex:WebGLTexture;
 let worldSpecimage:HTMLImageElement;
+
+let worldNighttex:WebGLTexture;
+let worldNightimage:HTMLImageElement;
+
+let worldCloudstex:WebGLTexture;
+let worldCloudsimage:HTMLImageElement;
 
 
 let anisotropic_ext;
@@ -58,7 +70,7 @@ window.onload = function init() {
     //black background
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     gl.enable(gl.DEPTH_TEST);
-
+    gl.enable(gl.BLEND);
 
     program = initFileShaders(gl, "vshader-texture.glsl", "fshader-texture.glsl");
 
@@ -68,10 +80,14 @@ window.onload = function init() {
     light_position = gl.getUniformLocation(program, "light_position");
     light_color = gl.getUniformLocation(program, "light_color");
     ambient_light = gl.getUniformLocation(program, "ambient_light");
-    uTextureSampler = gl.getUniformLocation(program, "colorMap");//get reference to sampler2D
-    gl.uniform1i(uTextureSampler, 0);
+
+    vActiveProgram = gl.getUniformLocation(program, "activeProgram");
+    vCloudsActive = gl.getUniformLocation(program, "drawClouds");
+
+    uColorSampler = gl.getUniformLocation(program, "colorMap");//get reference to sampler2D
     uSpecSampler = gl.getUniformLocation(program, "specMap");
-    gl.uniform1i(uSpecSampler, 1);
+    uNightSampler = gl.getUniformLocation(program, "nightMap");
+    uCloudSampler = gl.getUniformLocation(program, "cloudMap");
 
     //set up basic perspective viewing
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -80,6 +96,10 @@ window.onload = function init() {
     //don't forget to load in the texture files to main memory
     initTextures();
     makeSphereAndBuffer();
+    shaderEventListeners();
+    activeProgram = 1.0;
+    drawClouds = 1.0;
+    disableClouds = false;
 
     //initialize rotation angles
     xAngle = 0;
@@ -88,8 +108,31 @@ window.onload = function init() {
     window.setInterval(update, 16);
 };
 
+function shaderEventListeners(){
+    window.addEventListener("keydown" ,function(event){
+        switch(event.key) {
+            case "1":
+                activeProgram = 1;
+                break;
+            case "2":
+                activeProgram = 2;
+                break;
+            case "3":
+                activeProgram = 3;
+                break;
+            case "c":
+                if(disableClouds)
+                    disableClouds = false;
+                else
+                    disableClouds = true;
+                break;
+        }
+        requestAnimationFrame(render);
+    });
+}
+
 function update(){
-    worldRotate += 1;
+    worldRotate += .5;
     requestAnimationFrame(render);
 }
 
@@ -189,6 +232,16 @@ function initTextures() {
     worldSpecimage = new Image();
     worldSpecimage.onload = function() { handleTextureLoaded(worldSpecimage, worldSpectex); };
     worldSpecimage.src = 'EarthSpec.png';
+
+    worldNighttex = gl.createTexture();
+    worldNightimage = new Image();
+    worldNightimage.onload = function() { handleTextureLoaded(worldNightimage, worldNighttex); };
+    worldNightimage.src = 'EarthNight.png';
+
+    worldCloudstex = gl.createTexture();
+    worldCloudsimage = new Image();
+    worldCloudsimage.onload = function() { handleTextureLoaded(worldCloudsimage, worldCloudstex); };
+    worldCloudsimage.src = 'earthcloudmap-visness.png';
 }
 
 function handleTextureLoaded(image:HTMLImageElement, texture:WebGLTexture) {
@@ -203,26 +256,26 @@ function handleTextureLoaded(image:HTMLImageElement, texture:WebGLTexture) {
 }
 
 //draw a frame
-function render(){
+function render() {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    let p:mat4 = perspective(45, (canvas.clientWidth / canvas.clientHeight), 1, 20);
+    let p: mat4 = perspective(45, (canvas.clientWidth / canvas.clientHeight), 1, 20);
     gl.uniformMatrix4fv(uproj, false, p.flatten());
 
     //position camera 5 units back from origin
-    let mv:mat4 = lookAt(new vec4(0, 0, 5, 1), new vec4(0, 0, 0, 1), new vec4(0, 1, 0, 0));
+    let camera: mat4 = lookAt(new vec4(0, 0, 5, 1), new vec4(0, 0, 0, 1), new vec4(0, 1, 0, 0));
 
 
-    mv = mv.mult(rotateY(yAngle).mult(rotateX(xAngle)));
+    let mv: mat4 = camera.mult(rotateY(yAngle).mult(rotateX(xAngle)));
     gl.uniform4fv(light_position, mv.mult(new vec4(-10, 0, 5, 1)).flatten());
     mv = mv.mult(rotateY(worldRotate));
     mv = mv.mult(rotateX(90));
-
+    mv = mv.mult(scalem(1.25, 1.25, 1.25));
+    gl.uniformMatrix4fv(umv, false, mv.flatten());
     gl.uniform4fv(light_color, [.7, .7, .7, 1]);
-    gl.uniform4fv(ambient_light, [.2, .2, .2, 1]);
+    gl.uniform4fv(ambient_light, [.3, .3, .3, 1]);
 
     //send the modelview matrix over
-    gl.uniformMatrix4fv(umv, false, mv.flatten());
 
     //make sure the appropriate texture is sitting on texture unit 0
     //we could do this once since we only have one texture per object, but eventually you'll have multiple textures
@@ -230,9 +283,39 @@ function render(){
     gl.activeTexture(gl.TEXTURE0); //we're using texture unit 0
     gl.bindTexture(gl.TEXTURE_2D, worldtex);
 
+    gl.uniform1i(uColorSampler, 0);
+
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, worldSpectex);
+    gl.uniform1i(uSpecSampler, 1);
 
-    gl.drawArrays(gl.TRIANGLES, 0, spherePoints.length/2);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, worldNighttex);
+    gl.uniform1i(uNightSampler, 2);
+    gl.uniform1i(vActiveProgram, activeProgram);
+    drawClouds = 0;
+    gl.uniform1i(vCloudsActive, drawClouds);
+    gl.drawArrays(gl.TRIANGLES, 0, spherePoints.length / 2);
 
+
+
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.uniform1i(vCloudsActive, drawClouds);
+    let mvCloud: mat4 = camera.mult(rotateY(yAngle).mult(rotateX(xAngle)));
+    mvCloud = mvCloud.mult(rotateY(worldRotate/2));
+    mvCloud = mvCloud.mult(rotateX(90));
+    mvCloud = mvCloud.mult(scalem(1.26, 1.26, 1.26));
+
+
+    gl.uniformMatrix4fv(umv, false, mvCloud.flatten());
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, worldCloudstex);
+    gl.uniform1i(uCloudSampler, 3);
+
+    drawClouds = 1;
+    gl.uniform1i(vCloudsActive, drawClouds);
+    if(!disableClouds && activeProgram != 2)
+        gl.drawArrays(gl.TRIANGLES, 0, spherePoints.length / 2);
+    gl.depthMask(true);
 }
